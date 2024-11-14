@@ -33,13 +33,11 @@ const map = leaflet.map(document.getElementById("map")!, {
 });
 
 // Populate the map with a background tile layer
-leaflet
-  .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  })
-  .addTo(map);
+leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution:
+    '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
 
 // Add a marker to represent the player
 const playerMarker = leaflet.marker(OAKES_CLASSROOM);
@@ -50,79 +48,80 @@ playerMarker.addTo(map);
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 statusPanel.innerHTML = "No points yet...";
 
-const knownCells: Map<string, { i: number; j: number }> = new Map();
-
-// Player's inventory, using a single object to store all owned coins
-const playerInventory: { [coinKey: string]: string } = {};
-
-// Cache storage, using an object structure
-const cacheStorage: { [key: string]: string[] } = {};
-
-function latLngToGridCell(lat: number, lng: number) {
-  return {
-    i: Math.floor((lat - OAKES_CLASSROOM.lat) / TILE_DEGREES),
-    j: Math.floor((lng - OAKES_CLASSROOM.lng) / TILE_DEGREES),
-  };
+interface GridCell {
+  i: number;
+  j: number;
 }
 
-function getCanonicalCell(cell: { i: number; j: number }) {
-  const { i, j } = cell;
-  const key = [i, j].toString();
-  if (!knownCells.has(key)) {
-    knownCells.set(key, cell);
+const knownGridCells: Map<string, GridCell> = new Map();
+
+// Use a record to store coins
+const playerInventory: Record<string, string> = {};
+
+// Cache storage, using a Record structure
+const cacheStorage: Record<string, string[]> = {};
+
+const convertLatLngToGridCell = (
+  latitude: number,
+  longitude: number,
+): GridCell => ({
+  i: Math.floor((latitude - OAKES_CLASSROOM.lat) / TILE_DEGREES),
+  j: Math.floor((longitude - OAKES_CLASSROOM.lng) / TILE_DEGREES),
+});
+
+const getOrAddCanonicalGridCell = (cell: GridCell): GridCell => {
+  const cellKey = `${cell.i},${cell.j}`;
+  if (!knownGridCells.has(cellKey)) {
+    knownGridCells.set(cellKey, cell);
   }
-  return knownCells.get(key)!;
-}
+  return knownGridCells.get(cellKey)!;
+};
 
-// Function to create a coin for a specific grid cell with a serial
-function createCoin(i: number, j: number, serial: number) {
-  return `${i}:${j}#${serial}`;
-}
+const createCoinIdentifier = (i: number, j: number, serial: number): string =>
+  `${i}:${j}#${serial}`;
 
-// Adds a coin to player's inventory
-function addCoinToInventory(coin: string) {
+const addCoinToPlayerInventory = (coin: string): void => {
   playerInventory[coin] = coin;
-}
+};
 
-// Deletes a coin from player's inventory
-function removeCoinFromInventory(coin: string) {
+const removeCoinFromPlayerInventory = (coin: string): void => {
   delete playerInventory[coin];
-}
+};
 
-// Deposit a coin from player's inventory to a cache
-function depositCoinToCache(cacheKey: string, coin: string) {
+const depositCoinIntoCache = (cacheKey: string, coin: string): void => {
   if (!cacheStorage[cacheKey]) {
     cacheStorage[cacheKey] = [];
   }
 
   cacheStorage[cacheKey].push(coin);
-  removeCoinFromInventory(coin);
-}
+  removeCoinFromPlayerInventory(coin);
+};
 
-// Withdraw a coin from a cache to the player's inventory
-function withdrawCoinFromCache(cacheKey: string, coin: string) {
+const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
   if (!cacheStorage[cacheKey]) return;
 
-  cacheStorage[cacheKey] = cacheStorage[cacheKey].filter((c) => c !== coin);
-  addCoinToInventory(coin);
-}
+  cacheStorage[cacheKey] = cacheStorage[cacheKey].filter((storedCoin) =>
+    storedCoin !== coin
+  );
+  addCoinToPlayerInventory(coin);
+};
 
-function updateCoinDisplay(
+const updateCoinDisplay = (
   popupSpan: HTMLSpanElement,
   cacheKey: string,
   inventoryDisplay: HTMLDivElement,
-) {
+): void => {
   popupSpan.innerHTML = (cacheStorage[cacheKey] || []).join(", ");
   inventoryDisplay.innerHTML = `Player Inventory: ${
     Object.keys(playerInventory).join(", ")
   }`;
-}
+};
 
 // Add caches to the map by cell numbers
-function spawnCache(i: number, j: number) {
-  const convertedCell = latLngToGridCell(i, j);
-  const cacheCell = getCanonicalCell({ i, j });
-  const key = `${cacheCell.i}:${cacheCell.j}`;
+const addCacheToMap = (i: number, j: number): void => {
+  const gridCell = convertLatLngToGridCell(i, j);
+  const canonicalCell = getOrAddCanonicalGridCell({ i, j });
+  const cacheKey = `${canonicalCell.i}:${canonicalCell.j}`;
 
   // Convert cell numbers into lat/lng bounds
   const origin = OAKES_CLASSROOM;
@@ -136,21 +135,21 @@ function spawnCache(i: number, j: number) {
   rect.addTo(map);
 
   // Initialize cache coins
-  const cacheCoins = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
+  const coinCount = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
   const coins = Array.from(
-    { length: cacheCoins },
-    (_, serial) => createCoin(convertedCell.i, convertedCell.j, serial),
+    { length: coinCount },
+    (_, serial) => createCoinIdentifier(gridCell.i, gridCell.j, serial),
   );
 
-  cacheStorage[key] = coins;
+  cacheStorage[cacheKey] = coins;
 
   // Handle interactions with the cache
   rect.bindPopup(() => {
-    const coinsInCache = cacheStorage[key] || [];
+    const coinsInCache = cacheStorage[cacheKey] || [];
     const popupDiv = document.createElement("div");
 
     popupDiv.innerHTML = `
-      <div>There is a cache here at "${convertedCell.i},${convertedCell.j}". It has value <span id="value">${
+      <div>There is a cache here at "${gridCell.i},${gridCell.j}". It has value <span id="value">${
       coinsInCache.join(", ")
     }</span>.</div>
       <button id="deposit">deposit</button>
@@ -161,45 +160,45 @@ function spawnCache(i: number, j: number) {
       "#statusPanel",
     )!;
 
-    // Deposit from player inventory to cache
+    // Deposit a coin from player inventory to cache
     popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
       "click",
       () => {
-        const coinKeys = Object.keys(playerInventory);
-        if (coinKeys.length > 0) {
-          const coin = playerInventory[coinKeys[0]];
-          depositCoinToCache(key, coin);
-          updateCoinDisplay(popupSpan, key, inventoryDisplay);
+        const playerCoins = Object.keys(playerInventory);
+        if (playerCoins.length > 0) {
+          const coin = playerInventory[playerCoins[0]];
+          depositCoinIntoCache(cacheKey, coin);
+          updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
         }
       },
     );
 
-    // Withdraw from cache to player inventory
+    // Withdraw a coin from cache to player inventory
     popupDiv.querySelector<HTMLButtonElement>("#withdraw")!.addEventListener(
       "click",
       () => {
-        if (cacheStorage[key]?.length > 0) {
-          const coin = cacheStorage[key][0];
-          withdrawCoinFromCache(key, coin);
-          updateCoinDisplay(popupSpan, key, inventoryDisplay);
+        if (cacheStorage[cacheKey]?.length > 0) {
+          const coin = cacheStorage[cacheKey][0];
+          withdrawCoinFromCache(cacheKey, coin);
+          updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
         }
       },
     );
 
     return popupDiv;
   });
-}
+};
 
-function main() {
+const initializeGame = (): void => {
   // Look around the player's neighborhood for caches to spawn
   for (let i = -NEIGHBORHOOD_SIZE; i <= NEIGHBORHOOD_SIZE; i++) {
     for (let j = -NEIGHBORHOOD_SIZE; j <= NEIGHBORHOOD_SIZE; j++) {
       // If location i,j is lucky enough, spawn a cache!
       if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-        spawnCache(i, j);
+        addCacheToMap(i, j);
       }
     }
   }
-}
+};
 
-main();
+initializeGame();
