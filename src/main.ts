@@ -13,6 +13,8 @@ import "./leafletWorkaround.ts";
 // Deterministic random number generator
 import luck from "./luck.ts";
 
+const app = document.querySelector<HTMLDivElement>("#app")!;
+
 // Location of our classroom (as identified on Google Maps)
 const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
 
@@ -31,6 +33,49 @@ const map = leaflet.map(document.getElementById("map")!, {
   zoomControl: false,
   scrollWheelZoom: false,
 });
+
+const MOVEMENT = ["⬆️", "⬇️", "⬅️", "➡️"];
+
+function makeButton(
+  buttonDescription: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.innerHTML = buttonDescription;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+MOVEMENT.forEach((element) => {
+  const movementButton = makeButton(element, () => {
+    goDirection(element);
+  });
+  app.append(movementButton);
+});
+
+function goDirection(direction: string) {
+  if (direction === "⬆️") {
+    playerMarker.setLatLng([
+      playerMarker.getLatLng().lat + TILE_DEGREES,
+      playerMarker.getLatLng().lng,
+    ]);
+  } else if (direction === "⬇️") {
+    playerMarker.setLatLng([
+      playerMarker.getLatLng().lat - TILE_DEGREES,
+      playerMarker.getLatLng().lng,
+    ]);
+  } else if (direction === "⬅️") {
+    playerMarker.setLatLng([
+      playerMarker.getLatLng().lat,
+      playerMarker.getLatLng().lng - TILE_DEGREES,
+    ]);
+  } else if (direction === "➡️") {
+    playerMarker.setLatLng([
+      playerMarker.getLatLng().lat,
+      playerMarker.getLatLng().lng + TILE_DEGREES,
+    ]);
+  }
+}
 
 // Populate the map with a background tile layer
 leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -189,7 +234,7 @@ const addCacheToMap = (i: number, j: number): void => {
   });
 };
 
-const initializeGame = (): void => {
+function initializeGame() {
   // Look around the player's neighborhood for caches to spawn
   for (let i = -NEIGHBORHOOD_SIZE; i <= NEIGHBORHOOD_SIZE; i++) {
     for (let j = -NEIGHBORHOOD_SIZE; j <= NEIGHBORHOOD_SIZE; j++) {
@@ -199,6 +244,6 @@ const initializeGame = (): void => {
       }
     }
   }
-};
+}
 
 initializeGame();
