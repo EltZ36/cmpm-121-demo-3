@@ -34,7 +34,16 @@ const map = leaflet.map(document.getElementById("map")!, {
   scrollWheelZoom: false,
 });
 
-const MOVEMENT = ["⬆️", "⬇️", "⬅️", "➡️"];
+const DIRECTIONS = ["⬆️", "⬇️", "⬅️", "➡️"];
+
+//fixed this issue with https://stackoverflow.com/questions/57438198/typescript-element-implicitly-has-an-any-type-because-expression-of-type-st by user m_wer
+const directionOffsets: { [direction: string]: { lat: number; lng: number } } =
+  {
+    "⬆️": { lat: TILE_DEGREES, lng: 0 },
+    "⬇️": { lat: -TILE_DEGREES, lng: 0 },
+    "⬅️": { lat: 0, lng: -TILE_DEGREES },
+    "➡️": { lat: 0, lng: TILE_DEGREES },
+  };
 
 function makeButton(
   buttonDescription: string,
@@ -46,7 +55,7 @@ function makeButton(
   return button;
 }
 
-MOVEMENT.forEach((element) => {
+DIRECTIONS.forEach((element) => {
   const movementButton = makeButton(element, () => {
     goDirection(element);
   });
@@ -54,25 +63,11 @@ MOVEMENT.forEach((element) => {
 });
 
 function goDirection(direction: string) {
-  if (direction === "⬆️") {
+  const offset = directionOffsets[direction];
+  if (offset) {
     playerMarker.setLatLng([
-      playerMarker.getLatLng().lat + TILE_DEGREES,
-      playerMarker.getLatLng().lng,
-    ]);
-  } else if (direction === "⬇️") {
-    playerMarker.setLatLng([
-      playerMarker.getLatLng().lat - TILE_DEGREES,
-      playerMarker.getLatLng().lng,
-    ]);
-  } else if (direction === "⬅️") {
-    playerMarker.setLatLng([
-      playerMarker.getLatLng().lat,
-      playerMarker.getLatLng().lng - TILE_DEGREES,
-    ]);
-  } else if (direction === "➡️") {
-    playerMarker.setLatLng([
-      playerMarker.getLatLng().lat,
-      playerMarker.getLatLng().lng + TILE_DEGREES,
+      playerMarker.getLatLng().lat + offset.lat,
+      playerMarker.getLatLng().lng + offset.lng,
     ]);
   }
 }
