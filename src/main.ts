@@ -9,14 +9,15 @@ import "./style.css";
 
 // Fix missing marker images
 import "./leafletWorkaround.ts";
-
-// Deterministic random number generator
 import luck from "./luck.ts";
+
+// Import the IMapLib interface
+import { IMapLib } from "./index.d.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
 // Location of our classroom (as identified on Google Maps)
-const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
+const OAKES_CLASSROOM = { lat: 36.98949379578401, lng: -122.06277128548504 };
 
 // Tunable gameplay parameters
 const GAMEPLAY_ZOOM_LEVEL = 19;
@@ -24,19 +25,45 @@ const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
-// Create the map (element with id "map" is defined in index.html)
-const map = leaflet.map(document.getElementById("map")!, {
-  center: OAKES_CLASSROOM,
-  zoom: GAMEPLAY_ZOOM_LEVEL,
-  minZoom: GAMEPLAY_ZOOM_LEVEL,
-  maxZoom: GAMEPLAY_ZOOM_LEVEL,
-  zoomControl: false,
-  scrollWheelZoom: false,
-});
+// Leaflet Adapter
+const LeafletAdapter: IMapLib = {
+  createMap(center, zoom, elementId) {
+    return leaflet.map(document.getElementById(elementId)!, {
+      center: leaflet.latLng(center.lat, center.lng),
+      zoom: zoom,
+      minZoom: zoom,
+      maxZoom: zoom,
+      zoomControl: false,
+      scrollWheelZoom: false,
+    });
+  },
+  createTileLayer(urlTemplate, options) {
+    return leaflet.tileLayer(urlTemplate, options);
+  },
+  createMarker(position, tooltip) {
+    const marker = leaflet.marker([position.lat, position.lng]);
+    marker.bindTooltip(tooltip);
+    return marker;
+  },
+  removeLayer(layer) {
+    map.removeLayer(layer);
+  },
+  addLayer(layer) {
+    map.addLayer(layer);
+  },
+  createRectangle(bounds: [leaflet.LatLngTuple, leaflet.LatLngTuple]) {
+    return leaflet.rectangle(bounds);
+  },
+};
+
+// Create the map using the adapter
+const map = LeafletAdapter.createMap(
+  OAKES_CLASSROOM,
+  GAMEPLAY_ZOOM_LEVEL,
+  "map",
+);
 
 const DIRECTIONS = ["⬆️", "⬇️", "⬅️", "➡️"];
-
-//fixed this issue with https://stackoverflow.com/questions/57438198/typescript-element-implicitly-has-an-any-type-because-expression-of-type-st by user m_wer
 const directionOffsets: { [direction: string]: { lat: number; lng: number } } =
   {
     "⬆️": { lat: TILE_DEGREES, lng: 0 },
@@ -58,6 +85,7 @@ function makeButton(
 DIRECTIONS.forEach((element) => {
   const movementButton = makeButton(element, () => {
     goDirection(element);
+    regenerateCache();
   });
   app.append(movementButton);
 });
@@ -65,24 +93,30 @@ DIRECTIONS.forEach((element) => {
 function goDirection(direction: string) {
   const offset = directionOffsets[direction];
   if (offset) {
+    const latLng = playerMarker.getLatLng();
     playerMarker.setLatLng([
-      playerMarker.getLatLng().lat + offset.lat,
-      playerMarker.getLatLng().lng + offset.lng,
+      latLng.lat + offset.lat,
+      latLng.lng + offset.lng,
     ]);
   }
 }
 
 // Populate the map with a background tile layer
-leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution:
-    '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-}).addTo(map);
+LeafletAdapter.createTileLayer(
+  "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  },
+).addTo(map);
 
 // Add a marker to represent the player
-const playerMarker = leaflet.marker(OAKES_CLASSROOM);
-playerMarker.bindTooltip("That's you!");
-playerMarker.addTo(map);
+const playerMarker = LeafletAdapter.createMarker(
+  OAKES_CLASSROOM,
+  "That's you!",
+);
+LeafletAdapter.addLayer(playerMarker);
 
 // Display the player's points
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
@@ -94,7 +128,6 @@ interface GridCell {
 }
 
 const knownGridCells: Map<string, GridCell> = new Map();
-
 // Use a record to store coins
 const playerInventory: Record<string, string> = {};
 
@@ -163,16 +196,16 @@ const addCacheToMap = (i: number, j: number): void => {
   const canonicalCell = getOrAddCanonicalGridCell({ i, j });
   const cacheKey = `${canonicalCell.i}:${canonicalCell.j}`;
 
-  // Convert cell numbers into lat/lng bounds
+  // Calculate bounds using nested arrays for LatLngBoundsLiteral
   const origin = OAKES_CLASSROOM;
-  const bounds = leaflet.latLngBounds([
+  const bounds: [[number, number], [number, number]] = [
     [origin.lat + i * TILE_DEGREES, origin.lng + j * TILE_DEGREES],
     [origin.lat + (i + 1) * TILE_DEGREES, origin.lng + (j + 1) * TILE_DEGREES],
-  ]);
+  ];
 
   // Add a rectangle to the map to represent the cache
-  const rect = leaflet.rectangle(bounds);
-  rect.addTo(map);
+  const rect = LeafletAdapter.createRectangle(bounds);
+  LeafletAdapter.addLayer(rect);
 
   // Initialize cache coins
   const coinCount = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
@@ -228,6 +261,10 @@ const addCacheToMap = (i: number, j: number): void => {
     return popupDiv;
   });
 };
+
+function regenerateCache() {
+  initializeGame();
+}
 
 function initializeGame() {
   // Look around the player's neighborhood for caches to spawn
