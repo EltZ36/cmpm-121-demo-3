@@ -1,7 +1,7 @@
 // todo
 import "./style.css";
 // @deno-types="npm:@types/leaflet@^1.9.14"
-import leaflet from "leaflet";
+import leaflet, { Rectangle } from "leaflet";
 
 // Style sheets
 import "leaflet/dist/leaflet.css";
@@ -10,9 +10,7 @@ import "./style.css";
 // Fix missing marker images
 import "./leafletWorkaround.ts";
 import luck from "./luck.ts";
-
-// Import the IMapLib interface
-import { IMapLib } from "./index.d.ts";
+import { Cell, IMapLib } from "./index.d.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -98,6 +96,8 @@ function goDirection(direction: string) {
       latLng.lat + offset.lat,
       latLng.lng + offset.lng,
     ]);
+    //make the map move with the player
+    map.setView(latLng);
   }
 }
 
@@ -122,12 +122,7 @@ LeafletAdapter.addLayer(playerMarker);
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 statusPanel.innerHTML = "No points yet...";
 
-interface GridCell {
-  i: number;
-  j: number;
-}
-
-const knownGridCells: Map<string, GridCell> = new Map();
+const knownGridCells: Map<string, Cell> = new Map();
 // Use a record to store coins
 const playerInventory: Record<string, string> = {};
 
@@ -137,18 +132,18 @@ const cacheStorage: Record<string, string[]> = {};
 const convertLatLngToGridCell = (
   latitude: number,
   longitude: number,
-): GridCell => ({
+): Cell => ({
   i: Math.floor((latitude - OAKES_CLASSROOM.lat) / TILE_DEGREES),
   j: Math.floor((longitude - OAKES_CLASSROOM.lng) / TILE_DEGREES),
 });
 
-const getOrAddCanonicalGridCell = (cell: GridCell): GridCell => {
+function getOrAddCanonicalGridCell(cell: Cell): Cell {
   const cellKey = `${cell.i},${cell.j}`;
   if (!knownGridCells.has(cellKey)) {
     knownGridCells.set(cellKey, cell);
   }
   return knownGridCells.get(cellKey)!;
-};
+}
 
 const createCoinIdentifier = (i: number, j: number, serial: number): string =>
   `${i}:${j}#${serial}`;
@@ -206,6 +201,8 @@ const addCacheToMap = (i: number, j: number): void => {
   // Add a rectangle to the map to represent the cache
   const rect = LeafletAdapter.createRectangle(bounds);
   LeafletAdapter.addLayer(rect);
+  //idea for cache layers comes from CJ Moshy on https://github.com/CJMoshy/cmpm-121-demo-3/blob/main/src/main.ts lines 221 to 222
+  activeCacheLayers.add(rect);
 
   // Initialize cache coins
   const coinCount = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
@@ -262,15 +259,53 @@ const addCacheToMap = (i: number, j: number): void => {
   });
 };
 
-function regenerateCache() {
-  initializeGame();
+// Track active cache layers
+const activeCacheLayers: Set<Rectangle> = new Set();
+
+// Function to remove all current cache layers
+function clearCacheLayers() {
+  activeCacheLayers.forEach((layer) => {
+    LeafletAdapter.removeLayer(layer);
+  });
+  activeCacheLayers.clear();
 }
 
-function initializeGame() {
-  // Look around the player's neighborhood for caches to spawn
-  for (let i = -NEIGHBORHOOD_SIZE; i <= NEIGHBORHOOD_SIZE; i++) {
-    for (let j = -NEIGHBORHOOD_SIZE; j <= NEIGHBORHOOD_SIZE; j++) {
-      // If location i,j is lucky enough, spawn a cache!
+const toMemento = (): string => JSON.stringify(cacheStorage);
+const fromMemento = (state: string): void => {
+  const parsed = JSON.parse(state);
+  Object.assign(cacheStorage, parsed);
+};
+
+function saveCacheState(): string {
+  return toMemento();
+}
+
+function restoreCacheState(memento: string): void {
+  fromMemento(memento);
+}
+
+// Regenerate cache function that uses save/restore mechanics
+function regenerateCache() {
+  clearCacheLayers();
+  const playerPos = playerMarker.getLatLng();
+  const memento = saveCacheState();
+  createCaches(playerPos.lat, playerPos.lng);
+  restoreCacheState(memento);
+}
+
+function createCaches(playerLat: number, playerLng: number) {
+  const playerCell = convertLatLngToGridCell(playerLat, playerLng);
+
+  for (
+    let i = playerCell.i - NEIGHBORHOOD_SIZE;
+    i <= playerCell.i + NEIGHBORHOOD_SIZE;
+    i++
+  ) {
+    for (
+      let j = playerCell.j - NEIGHBORHOOD_SIZE;
+      j <= playerCell.j + NEIGHBORHOOD_SIZE;
+      j++
+    ) {
       if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
         addCacheToMap(i, j);
       }
@@ -278,4 +313,4 @@ function initializeGame() {
   }
 }
 
-initializeGame();
+createCaches(OAKES_CLASSROOM.lat, OAKES_CLASSROOM.lng);
