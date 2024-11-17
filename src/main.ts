@@ -145,8 +145,20 @@ function getOrAddCanonicalGridCell(cell: Cell): Cell {
   return knownGridCells.get(cellKey)!;
 }
 
+function generateRandomCoinIdentifier(
+  i: number,
+  j: number,
+  serialSeed: number,
+): number {
+  // Use the 'luck' function to get a more random number
+  const randomValue = Math.floor(
+    luck([i, j, "serial", serialSeed].toString()) * 100000,
+  );
+  return randomValue;
+}
+
 const createCoinIdentifier = (i: number, j: number, serial: number): string =>
-  `${i}:${j}#${serial}`;
+  `${i}:${j}#${generateRandomCoinIdentifier(i, j, serial)}`;
 
 const addCoinToPlayerInventory = (coin: string): void => {
   playerInventory[coin] = coin;
@@ -184,6 +196,48 @@ const updateCoinDisplay = (
     Object.keys(playerInventory).join(", ")
   }`;
 };
+
+function popButton(
+  popupDiv: HTMLDivElement,
+  inventoryDisplay: HTMLDivElement,
+  popupSpan: HTMLSpanElement,
+  cacheKey: string,
+) {
+  popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
+    "click",
+    () => depositCoins(cacheKey, popupSpan, inventoryDisplay),
+  );
+
+  popupDiv.querySelector<HTMLButtonElement>("#withdraw")!.addEventListener(
+    "click",
+    () => withdrawCoins(cacheKey, popupSpan, inventoryDisplay),
+  );
+}
+
+function depositCoins(
+  cacheKey: string,
+  popupSpan: HTMLSpanElement,
+  inventoryDisplay: HTMLDivElement,
+) {
+  const playerCoins = Object.keys(playerInventory);
+  if (playerCoins.length > 0) {
+    const coin = playerInventory[playerCoins[0]];
+    depositCoinIntoCache(cacheKey, coin);
+    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+  }
+}
+
+function withdrawCoins(
+  cacheKey: string,
+  popupSpan: HTMLSpanElement,
+  inventoryDisplay: HTMLDivElement,
+) {
+  if (cacheStorage[cacheKey]?.length > 0) {
+    const coin = cacheStorage[cacheKey][0];
+    withdrawCoinFromCache(cacheKey, coin);
+    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+  }
+}
 
 // Add caches to the map by cell numbers
 const addCacheToMap = (i: number, j: number): void => {
@@ -230,31 +284,7 @@ const addCacheToMap = (i: number, j: number): void => {
       "#statusPanel",
     )!;
 
-    // Deposit a coin from player inventory to cache
-    popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
-      "click",
-      () => {
-        const playerCoins = Object.keys(playerInventory);
-        if (playerCoins.length > 0) {
-          const coin = playerInventory[playerCoins[0]];
-          depositCoinIntoCache(cacheKey, coin);
-          updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-        }
-      },
-    );
-
-    // Withdraw a coin from cache to player inventory
-    popupDiv.querySelector<HTMLButtonElement>("#withdraw")!.addEventListener(
-      "click",
-      () => {
-        if (cacheStorage[cacheKey]?.length > 0) {
-          const coin = cacheStorage[cacheKey][0];
-          withdrawCoinFromCache(cacheKey, coin);
-          updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-        }
-      },
-    );
-
+    popButton(popupDiv, inventoryDisplay, popupSpan, cacheKey);
     return popupDiv;
   });
 };
