@@ -88,6 +88,15 @@ DIRECTIONS.forEach((element) => {
   app.append(movementButton);
 });
 
+const resetButton = makeButton("🚮", () => {
+  resetCaches();
+});
+const locationButton = makeButton("🌐", () => {
+  showLocation();
+});
+
+app.append(resetButton, locationButton);
+
 function goDirection(direction: string) {
   const offset = directionOffsets[direction];
   if (offset) {
@@ -128,6 +137,37 @@ const playerInventory: Record<string, string> = {};
 
 // Cache storage, using a Record structure
 const cacheStorage: Record<string, string[]> = {};
+
+function resetCaches() {
+  const resetPrompt = prompt("Do you want to reset the map?");
+  if (resetPrompt != null) {
+    console.log("Resetting caches");
+  }
+}
+
+function success(pos: GeolocationPosition) {
+  const lat = pos.coords.latitude;
+  const lng = pos.coords.longitude;
+  playerMarker.setLatLng([lat, lng]);
+  map.setView([lat, lng], map.getZoom());
+  console.log(`found you! at ${lat} ${lng}`);
+}
+
+function showLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(success, function (error) {
+      console.error("Error Code: " + error.code + " - " + error.message);
+    }, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 5000,
+    });
+    // Optional: stop watching after a certain condition
+    // navigator.geolocation.clearWatch(watchId);
+  } else {
+    alert("Geolocation is not supported by this browser.");
+  }
+}
 
 const convertLatLngToGridCell = (
   latitude: number,
