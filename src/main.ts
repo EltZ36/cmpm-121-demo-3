@@ -10,7 +10,7 @@ import "./style.css";
 // Fix missing marker images
 import "./leafletWorkaround.ts";
 import luck from "./luck.ts";
-import { Cell, IMapLib } from "./index.d.ts";
+// import { Cell, IMapLib } from "./index.d.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -83,6 +83,7 @@ function makeButton(
 DIRECTIONS.forEach((element) => {
   const movementButton = makeButton(element, () => {
     goDirection(element);
+    drawLine();
     regenerateCache();
   });
   app.append(movementButton);
@@ -131,17 +132,44 @@ LeafletAdapter.addLayer(playerMarker);
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
 statusPanel.innerHTML = "No points yet...";
 
-const knownGridCells: Map<string, Cell> = new Map();
+/*const knownGridCells: Map<string, Cell> = new Map();
 // Use a record to store coins
 const playerInventory: Record<string, string> = {};
 
 // Cache storage, using a Record structure
-const cacheStorage: Record<string, string[]> = {};
+const cacheStorage: Record<string, string[]> = {};*/
+//const playerLine = leaflet.polyline([playerMarker.getLatLng()], {color: 'red'}).addTo(map);
+
+const [playerInventory, cacheStorage, knownGridCells, playerLine] =
+  loadFromLocalStorage();
+
+playerLine.setStyle({ weight: 5 });
+
+function drawLine() {
+  playerLine.addLatLng([
+    playerMarker.getLatLng().lat,
+    playerMarker.getLatLng().lng,
+  ]);
+}
+
+function clearRecord<K extends string, V>(record: Record<K, V>): void {
+  (Object.keys(record) as K[]).forEach((key) => {
+    delete record[key];
+  });
+}
 
 function resetCaches() {
   const resetPrompt = prompt("Do you want to reset the map?");
   if (resetPrompt != null) {
     console.log("Resetting caches");
+    clearRecord(playerInventory);
+    clearRecord(cacheStorage);
+    knownGridCells.clear();
+    playerLine.setLatLngs([]);
+    playerMarker.setLatLng(OAKES_CLASSROOM);
+    localStorage.clear();
+    clearCacheLayers();
+    createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
   }
 }
 
@@ -340,27 +368,64 @@ function clearCacheLayers() {
   activeCacheLayers.clear();
 }
 
-const toMemento = (): string => JSON.stringify(cacheStorage);
-const fromMemento = (state: string): void => {
-  const parsed = JSON.parse(state);
-  Object.assign(cacheStorage, parsed);
-};
-
-function saveCacheState(): string {
-  return toMemento();
+function toMemento<T>(x: T): string {
+  return JSON.stringify(x);
 }
 
-function restoreCacheState(memento: string): void {
-  fromMemento(memento);
+function fromMemento(state: string) {
+  const parsed = JSON.parse(state);
+  return parsed;
+}
+
+function saveToLocalStorage(): void {
+  localStorage.setItem("knownGridCells", toMemento(knownGridCells));
+  localStorage.setItem("cacheStorage", toMemento(cacheStorage));
+  localStorage.setItem("playerInventory", toMemento(playerInventory));
+  localStorage.setItem("playerLine", toMemento(playerLine.getLatLngs()));
+}
+
+//saveToLocalStorage and loadfromLocalStorage done with the help of CJ Moshy
+function loadFromLocalStorage(): [
+  Record<string, string>,
+  Record<string, string[]>,
+  Map<string, Cell>,
+  leaflet.Polyline,
+] {
+  let knownGridCells: Map<string, Cell> = new Map();
+  // Use a record to store coins
+  let playerInventory: Record<string, string> = {};
+  // Cache storage, using a Record structure
+  let cacheStorage: Record<string, string[]> = {};
+  const playerLine = leaflet.polyline([playerMarker.getLatLng()], {
+    color: "red",
+  }).addTo(map);
+  const _knownGridCells = localStorage.getItem("knownGridCells");
+  const _cacheStorage = localStorage.getItem("cacheStorage");
+  const _playerInventory = localStorage.getItem("playerInventory");
+  const _playerLine = localStorage.getItem("playerLine");
+
+  if (_knownGridCells) {
+    knownGridCells = new Map([fromMemento(_knownGridCells)]);
+  }
+  if (_playerInventory) {
+    playerInventory = fromMemento(_playerInventory);
+  }
+  if (_cacheStorage) {
+    cacheStorage = fromMemento(_cacheStorage);
+  }
+  if (_playerLine) {
+    playerLine.setLatLngs([fromMemento(_playerLine)]);
+  }
+
+  return [playerInventory, cacheStorage, knownGridCells, playerLine];
 }
 
 // Regenerate cache function that uses save/restore mechanics
 function regenerateCache() {
   clearCacheLayers();
   const playerPos = playerMarker.getLatLng();
-  const memento = saveCacheState();
+  saveToLocalStorage();
   createCaches(playerPos.lat, playerPos.lng);
-  restoreCacheState(memento);
 }
 
 function createCaches(playerLat: number, playerLng: number) {
