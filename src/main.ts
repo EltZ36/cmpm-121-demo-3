@@ -93,11 +93,29 @@ const resetButton = makeButton("🚮", () => {
   resetCaches();
 });
 const locationButton = makeButton("🌐", () => {
+  createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
   showLocation();
 });
 
 app.append(resetButton, locationButton);
 
+// Function to save player location to localStorage
+function savePlayerLocation() {
+  const playerPos = playerMarker.getLatLng();
+  localStorage.setItem("playerLocation", JSON.stringify(playerPos));
+}
+
+// Function to load player location from localStorage
+function loadPlayerLocation() {
+  const storedLocation = localStorage.getItem("playerLocation");
+  if (storedLocation) {
+    const { lat, lng } = JSON.parse(storedLocation);
+    playerMarker.setLatLng([lat, lng]);
+    map.setView([lat, lng], map.getZoom());
+  }
+}
+
+// Call this function to save the location, e.g., after moving the player
 function goDirection(direction: string) {
   const offset = directionOffsets[direction];
   if (offset) {
@@ -106,8 +124,8 @@ function goDirection(direction: string) {
       latLng.lat + offset.lat,
       latLng.lng + offset.lng,
     ]);
-    //make the map move with the player
-    map.setView(latLng);
+    map.setView(playerMarker.getLatLng()); // Update view position to new location
+    savePlayerLocation(); // Save location after moving
   }
 }
 
@@ -128,28 +146,29 @@ const playerMarker = LeafletAdapter.createMarker(
 );
 LeafletAdapter.addLayer(playerMarker);
 
-// Display the player's points
-const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
-statusPanel.innerHTML = "No points yet...";
-
-/*const knownGridCells: Map<string, Cell> = new Map();
-// Use a record to store coins
-const playerInventory: Record<string, string> = {};
-
-// Cache storage, using a Record structure
-const cacheStorage: Record<string, string[]> = {};*/
-//const playerLine = leaflet.polyline([playerMarker.getLatLng()], {color: 'red'}).addTo(map);
-
 const [playerInventory, cacheStorage, knownGridCells, playerLine] =
   loadFromLocalStorage();
-
 playerLine.setStyle({ weight: 5 });
+
+// Display the player's points
+const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
+if (getRecordLength(playerInventory) == 0) {
+  statusPanel.innerHTML = "No points yet...";
+} else {
+  statusPanel.innerHTML = `Player Inventory: ${
+    Object.keys(playerInventory).join(", ")
+  }`;
+}
 
 function drawLine() {
   playerLine.addLatLng([
     playerMarker.getLatLng().lat,
     playerMarker.getLatLng().lng,
   ]);
+}
+
+function getRecordLength<K extends string, V>(record: Record<K, V>): number {
+  return Object.keys(record).length;
 }
 
 function clearRecord<K extends string, V>(record: Record<K, V>): void {
@@ -161,7 +180,6 @@ function clearRecord<K extends string, V>(record: Record<K, V>): void {
 function resetCaches() {
   const resetPrompt = prompt("Do you want to reset the map?");
   if (resetPrompt != null) {
-    console.log("Resetting caches");
     clearRecord(playerInventory);
     clearRecord(cacheStorage);
     knownGridCells.clear();
@@ -170,31 +188,61 @@ function resetCaches() {
     localStorage.clear();
     clearCacheLayers();
     createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
+    statusPanel.innerHTML = "No points yet...";
   }
-}
-
-function success(pos: GeolocationPosition) {
-  const lat = pos.coords.latitude;
-  const lng = pos.coords.longitude;
-  playerMarker.setLatLng([lat, lng]);
-  map.setView([lat, lng], map.getZoom());
-  console.log(`found you! at ${lat} ${lng}`);
 }
 
 function showLocation() {
   if (navigator.geolocation) {
-    navigator.geolocation.watchPosition(success, function (error) {
-      console.error("Error Code: " + error.code + " - " + error.message);
-    }, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 5000,
-    });
-    // Optional: stop watching after a certain condition
-    // navigator.geolocation.clearWatch(watchId);
+    const _watchId = navigator.geolocation.watchPosition(
+      handlePositionUpdate(),
+      handleError,
+      getGeolocationOptions(),
+    );
   } else {
     alert("Geolocation is not supported by this browser.");
   }
+}
+
+function handlePositionUpdate() {
+  let lastPosition: { lat: number; lng: number } | null = null;
+
+  return (position: GeolocationPosition) => {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+
+    if (hasPositionChanged(lastPosition, lat, lng)) {
+      updatePosition(lat, lng);
+      createCaches(lat, lng);
+      lastPosition = { lat, lng };
+    }
+  };
+}
+
+function updatePosition(lat: number, lng: number) {
+  playerMarker.setLatLng([lat, lng]);
+  savePlayerLocation();
+  map.setView([lat, lng], map.getZoom());
+}
+
+function hasPositionChanged(
+  lastPosition: { lat: number; lng: number } | null,
+  lat: number,
+  lng: number,
+): boolean {
+  return !lastPosition || lastPosition.lat !== lat || lastPosition.lng !== lng;
+}
+
+function handleError(error: GeolocationPositionError) {
+  console.error("Error Code: " + error.code + " - " + error.message);
+}
+
+function getGeolocationOptions() {
+  return {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 5000,
+  };
 }
 
 const convertLatLngToGridCell = (
@@ -204,14 +252,6 @@ const convertLatLngToGridCell = (
   i: Math.floor((latitude - OAKES_CLASSROOM.lat) / TILE_DEGREES),
   j: Math.floor((longitude - OAKES_CLASSROOM.lng) / TILE_DEGREES),
 });
-
-function getOrAddCanonicalGridCell(cell: Cell): Cell {
-  const cellKey = `${cell.i},${cell.j}`;
-  if (!knownGridCells.has(cellKey)) {
-    knownGridCells.set(cellKey, cell);
-  }
-  return knownGridCells.get(cellKey)!;
-}
 
 function generateRandomCoinIdentifier(
   i: number,
@@ -243,6 +283,7 @@ const depositCoinIntoCache = (cacheKey: string, coin: string): void => {
 
   cacheStorage[cacheKey].push(coin);
   removeCoinFromPlayerInventory(coin);
+  saveToLocalStorage();
 };
 
 const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
@@ -252,6 +293,7 @@ const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
     storedCoin !== coin
   );
   addCoinToPlayerInventory(coin);
+  saveToLocalStorage();
 };
 
 const updateCoinDisplay = (
@@ -292,6 +334,7 @@ function depositCoins(
     const coin = playerInventory[playerCoins[0]];
     depositCoinIntoCache(cacheKey, coin);
     updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+    saveToLocalStorage();
   }
 }
 
@@ -304,61 +347,59 @@ function withdrawCoins(
     const coin = cacheStorage[cacheKey][0];
     withdrawCoinFromCache(cacheKey, coin);
     updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+    saveToLocalStorage();
   }
 }
 
-// Add caches to the map by cell numbers
+const activeCacheLayers: Set<Rectangle> = new Set();
+
 const addCacheToMap = (i: number, j: number): void => {
   const gridCell = convertLatLngToGridCell(i, j);
-  const canonicalCell = getOrAddCanonicalGridCell({ i, j });
-  const cacheKey = `${canonicalCell.i}:${canonicalCell.j}`;
+  const cacheKey = `${gridCell.i}:${gridCell.j}`;
 
-  // Calculate bounds using nested arrays for LatLngBoundsLiteral
-  const origin = OAKES_CLASSROOM;
+  if (!(cacheKey in cacheStorage)) {
+    const coins = Array.from({
+      length: Math.floor(luck([i, j, "initialValue"].toString()) * 100),
+    }, (_, serial) => createCoinIdentifier(gridCell.i, gridCell.j, serial));
+    cacheStorage[cacheKey] = coins; // Set initial inventory
+  }
+
   const bounds: [[number, number], [number, number]] = [
-    [origin.lat + i * TILE_DEGREES, origin.lng + j * TILE_DEGREES],
-    [origin.lat + (i + 1) * TILE_DEGREES, origin.lng + (j + 1) * TILE_DEGREES],
+    [
+      OAKES_CLASSROOM.lat + i * TILE_DEGREES,
+      OAKES_CLASSROOM.lng + j * TILE_DEGREES,
+    ],
+    [
+      OAKES_CLASSROOM.lat + (i + 1) * TILE_DEGREES,
+      OAKES_CLASSROOM.lng + (j + 1) * TILE_DEGREES,
+    ],
   ];
 
-  // Add a rectangle to the map to represent the cache
   const rect = LeafletAdapter.createRectangle(bounds);
   LeafletAdapter.addLayer(rect);
-  //idea for cache layers comes from CJ Moshy on https://github.com/CJMoshy/cmpm-121-demo-3/blob/main/src/main.ts lines 221 to 222
   activeCacheLayers.add(rect);
 
-  // Initialize cache coins
-  const coinCount = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
-  const coins = Array.from(
-    { length: coinCount },
-    (_, serial) => createCoinIdentifier(gridCell.i, gridCell.j, serial),
-  );
-
-  cacheStorage[cacheKey] = coins;
-
-  // Handle interactions with the cache
-  rect.bindPopup(() => {
-    const coinsInCache = cacheStorage[cacheKey] || [];
-    const popupDiv = document.createElement("div");
-
-    popupDiv.innerHTML = `
-      <div>There is a cache here at "${gridCell.i},${gridCell.j}". It has value <span id="value">${
-      coinsInCache.join(", ")
-    }</span>.</div>
-      <button id="deposit">deposit</button>
-      <button id="withdraw">withdraw</button>`;
-
-    const popupSpan = popupDiv.querySelector<HTMLSpanElement>("#value")!;
-    const inventoryDisplay = document.querySelector<HTMLDivElement>(
-      "#statusPanel",
-    )!;
-
-    popButton(popupDiv, inventoryDisplay, popupSpan, cacheKey);
-    return popupDiv;
-  });
+  rect.bindPopup(() => createPopup(cacheKey));
 };
 
-// Track active cache layers
-const activeCacheLayers: Set<Rectangle> = new Set();
+function createPopup(cacheKey: string) {
+  const coinsInCache = cacheStorage[cacheKey] || [];
+  const popupDiv = document.createElement("div");
+  popupDiv.innerHTML = `
+    <div>Cache "${cacheKey}" Inventory: <span id="value">${
+    coinsInCache.join(", ")
+  }</span>.</div>
+    <button id="deposit">deposit</button>
+    <button id="withdraw">withdraw</button>`;
+
+  const popupSpan = popupDiv.querySelector<HTMLSpanElement>("#value")!;
+  const inventoryDisplay = document.querySelector<HTMLDivElement>(
+    "#statusPanel",
+  )!;
+  popButton(popupDiv, inventoryDisplay, popupSpan, cacheKey);
+
+  return popupDiv;
+}
 
 // Function to remove all current cache layers
 function clearCacheLayers() {
@@ -448,4 +489,9 @@ function createCaches(playerLat: number, playerLng: number) {
   }
 }
 
-createCaches(OAKES_CLASSROOM.lat, OAKES_CLASSROOM.lng);
+function main() {
+  loadPlayerLocation();
+  createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
+}
+
+main();
