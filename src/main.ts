@@ -1,7 +1,7 @@
 // todo
 import "./style.css";
 // @deno-types="npm:@types/leaflet@^1.9.14"
-import leaflet, { Rectangle } from "leaflet";
+import leaflet from "leaflet";
 
 // Style sheets
 import "leaflet/dist/leaflet.css";
@@ -46,6 +46,15 @@ const LeafletAdapter: IMapLib = {
   removeLayer(layer) {
     map.removeLayer(layer);
   },
+  getMarkerPosition(marker) {
+    return marker.getLatLng();
+  },
+  setMarkerPosition(marker, position) {
+    marker.setLatLng([position.lat, position.lng]);
+  },
+  updateMapView(lat, lng) {
+    map.setView([lat, lng], map.getZoom());
+  },
   addLayer(layer) {
     map.addLayer(layer);
   },
@@ -60,6 +69,27 @@ const map = LeafletAdapter.createMap(
   GAMEPLAY_ZOOM_LEVEL,
   "map",
 );
+
+// Populate the map with a background tile layer
+LeafletAdapter.createTileLayer(
+  "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  },
+).addTo(map);
+
+// Add a marker to represent the player
+const playerMarker = LeafletAdapter.createMarker(
+  OAKES_CLASSROOM,
+  "That's you!",
+);
+LeafletAdapter.addLayer(playerMarker);
+
+const [playerInventory, cacheStorage, knownGridCells, playerLine] =
+  loadFromLocalStorage();
+playerLine.setStyle({ weight: 5 });
 
 const DIRECTIONS = ["⬆️", "⬇️", "⬅️", "➡️"];
 const directionOffsets: { [direction: string]: { lat: number; lng: number } } =
@@ -99,56 +129,75 @@ const locationButton = makeButton("🌐", () => {
 
 app.append(resetButton, locationButton);
 
-// Function to save player location to localStorage
-function savePlayerLocation() {
-  const playerPos = playerMarker.getLatLng();
-  localStorage.setItem("playerLocation", JSON.stringify(playerPos));
-}
-
-// Function to load player location from localStorage
-function loadPlayerLocation() {
-  const storedLocation = localStorage.getItem("playerLocation");
-  if (storedLocation) {
-    const { lat, lng } = JSON.parse(storedLocation);
-    playerMarker.setLatLng([lat, lng]);
-    map.setView([lat, lng], map.getZoom());
-  }
-}
-
 // Call this function to save the location, e.g., after moving the player
 function goDirection(direction: string) {
   const offset = directionOffsets[direction];
   if (offset) {
-    const latLng = playerMarker.getLatLng();
-    playerMarker.setLatLng([
-      latLng.lat + offset.lat,
-      latLng.lng + offset.lng,
-    ]);
-    map.setView(playerMarker.getLatLng()); // Update view position to new location
-    savePlayerLocation(); // Save location after moving
+    const currentPosition = LeafletAdapter.getMarkerPosition(playerMarker);
+    const newPosition = {
+      lat: currentPosition.lat + offset.lat,
+      lng: currentPosition.lng + offset.lng,
+    };
+    LeafletAdapter.setMarkerPosition(playerMarker, newPosition);
+    LeafletAdapter.updateMapView(newPosition.lat, newPosition.lng);
+    saveGameState();
   }
 }
 
-// Populate the map with a background tile layer
-LeafletAdapter.createTileLayer(
-  "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  },
-).addTo(map);
+const updateCoinDisplay = (
+  popupSpan: HTMLSpanElement,
+  cacheKey: string,
+  inventoryDisplay: HTMLDivElement,
+): void => {
+  popupSpan.innerHTML = (cacheStorage[cacheKey] || []).join(", ");
+  inventoryDisplay.innerHTML = `Player Inventory: ${
+    Object.keys(playerInventory).join(", ")
+  }`;
+};
 
-// Add a marker to represent the player
-const playerMarker = LeafletAdapter.createMarker(
-  OAKES_CLASSROOM,
-  "That's you!",
-);
-LeafletAdapter.addLayer(playerMarker);
+function popButton(
+  popupDiv: HTMLDivElement,
+  inventoryDisplay: HTMLDivElement,
+  popupSpan: HTMLSpanElement,
+  cacheKey: string,
+) {
+  popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
+    "click",
+    () => depositCoins(cacheKey, popupSpan, inventoryDisplay),
+  );
 
-const [playerInventory, cacheStorage, knownGridCells, playerLine] =
-  loadFromLocalStorage();
-playerLine.setStyle({ weight: 5 });
+  popupDiv.querySelector<HTMLButtonElement>("#withdraw")!.addEventListener(
+    "click",
+    () => withdrawCoins(cacheKey, popupSpan, inventoryDisplay),
+  );
+}
+
+function depositCoins(
+  cacheKey: string,
+  popupSpan: HTMLSpanElement,
+  inventoryDisplay: HTMLDivElement,
+) {
+  const playerCoins = Object.keys(playerInventory);
+  if (playerCoins.length > 0) {
+    const coin = playerInventory[playerCoins[0]];
+    depositCoinIntoCache(cacheKey, coin);
+    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+    saveGameState();
+  }
+}
+
+function withdrawCoins(
+  cacheKey: string,
+  popupSpan: HTMLSpanElement,
+  inventoryDisplay: HTMLDivElement,
+) {
+  if (cacheStorage[cacheKey]?.length > 0) {
+    const coin = cacheStorage[cacheKey][0];
+    withdrawCoinFromCache(cacheKey, coin);
+    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
+    saveGameState();
+  }
+}
 
 // Display the player's points
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
@@ -178,18 +227,37 @@ function clearRecord<K extends string, V>(record: Record<K, V>): void {
 }
 
 function resetCaches() {
-  const resetPrompt = prompt("Do you want to reset the map?");
-  if (resetPrompt != null) {
-    clearRecord(playerInventory);
-    clearRecord(cacheStorage);
-    knownGridCells.clear();
-    playerLine.setLatLngs([]);
-    playerMarker.setLatLng(OAKES_CLASSROOM);
-    localStorage.clear();
-    clearCacheLayers();
-    createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
-    statusPanel.innerHTML = "No points yet...";
+  const shouldReset = confirmReset();
+  if (shouldReset) {
+    resetGameState();
+    resetUI();
+    saveGameStateAfterReset();
   }
+}
+
+function confirmReset(): boolean {
+  const resetPrompt = prompt("Do you want to reset the map?");
+  return resetPrompt != null;
+}
+
+function resetGameState(): void {
+  clearRecord(playerInventory);
+  clearRecord(cacheStorage);
+  knownGridCells.clear();
+  playerLine.setLatLngs([]);
+  playerMarker.setLatLng(OAKES_CLASSROOM);
+  clearCacheLayers();
+}
+
+function resetUI(): void {
+  statusPanel.innerHTML = "No points yet...";
+}
+
+function saveGameStateAfterReset(): void {
+  localStorage.clear();
+  const playerLatLng = LeafletAdapter.getMarkerPosition(playerMarker);
+  createCaches(playerLatLng.lat, playerLatLng.lng);
+  saveGameState();
 }
 
 function showLocation() {
@@ -221,7 +289,7 @@ function handlePositionUpdate() {
 
 function updatePosition(lat: number, lng: number) {
   playerMarker.setLatLng([lat, lng]);
-  savePlayerLocation();
+  saveGameState();
   map.setView([lat, lng], map.getZoom());
 }
 
@@ -283,7 +351,7 @@ const depositCoinIntoCache = (cacheKey: string, coin: string): void => {
 
   cacheStorage[cacheKey].push(coin);
   removeCoinFromPlayerInventory(coin);
-  saveToLocalStorage();
+  saveGameState();
 };
 
 const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
@@ -293,78 +361,20 @@ const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
     storedCoin !== coin
   );
   addCoinToPlayerInventory(coin);
-  saveToLocalStorage();
+  saveGameState();
 };
 
-const updateCoinDisplay = (
-  popupSpan: HTMLSpanElement,
-  cacheKey: string,
-  inventoryDisplay: HTMLDivElement,
-): void => {
-  popupSpan.innerHTML = (cacheStorage[cacheKey] || []).join(", ");
-  inventoryDisplay.innerHTML = `Player Inventory: ${
-    Object.keys(playerInventory).join(", ")
-  }`;
-};
+const activeCacheLayers: Set<leaflet.Layer> = new Set();
 
-function popButton(
-  popupDiv: HTMLDivElement,
-  inventoryDisplay: HTMLDivElement,
-  popupSpan: HTMLSpanElement,
-  cacheKey: string,
-) {
-  popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
-    "click",
-    () => depositCoins(cacheKey, popupSpan, inventoryDisplay),
-  );
-
-  popupDiv.querySelector<HTMLButtonElement>("#withdraw")!.addEventListener(
-    "click",
-    () => withdrawCoins(cacheKey, popupSpan, inventoryDisplay),
-  );
+function getCacheKey(gridCell: Cell): string {
+  return `${gridCell.i}:${gridCell.j}`;
 }
 
-function depositCoins(
-  cacheKey: string,
-  popupSpan: HTMLSpanElement,
-  inventoryDisplay: HTMLDivElement,
-) {
-  const playerCoins = Object.keys(playerInventory);
-  if (playerCoins.length > 0) {
-    const coin = playerInventory[playerCoins[0]];
-    depositCoinIntoCache(cacheKey, coin);
-    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-    saveToLocalStorage();
-  }
-}
-
-function withdrawCoins(
-  cacheKey: string,
-  popupSpan: HTMLSpanElement,
-  inventoryDisplay: HTMLDivElement,
-) {
-  if (cacheStorage[cacheKey]?.length > 0) {
-    const coin = cacheStorage[cacheKey][0];
-    withdrawCoinFromCache(cacheKey, coin);
-    updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-    saveToLocalStorage();
-  }
-}
-
-const activeCacheLayers: Set<Rectangle> = new Set();
-
-const addCacheToMap = (i: number, j: number): void => {
-  const gridCell = convertLatLngToGridCell(i, j);
-  const cacheKey = `${gridCell.i}:${gridCell.j}`;
-
-  if (!(cacheKey in cacheStorage)) {
-    const coins = Array.from({
-      length: Math.floor(luck([i, j, "initialValue"].toString()) * 100),
-    }, (_, serial) => createCoinIdentifier(gridCell.i, gridCell.j, serial));
-    cacheStorage[cacheKey] = coins; // Set initial inventory
-  }
-
-  const bounds: [[number, number], [number, number]] = [
+function calculateBounds(
+  i: number,
+  j: number,
+): [[number, number], [number, number]] {
+  return [
     [
       OAKES_CLASSROOM.lat + i * TILE_DEGREES,
       OAKES_CLASSROOM.lng + j * TILE_DEGREES,
@@ -374,13 +384,59 @@ const addCacheToMap = (i: number, j: number): void => {
       OAKES_CLASSROOM.lng + (j + 1) * TILE_DEGREES,
     ],
   ];
+}
 
+function addCacheLayer(i: number, j: number, cacheKey: string): void {
+  const bounds = calculateBounds(i, j);
   const rect = LeafletAdapter.createRectangle(bounds);
   LeafletAdapter.addLayer(rect);
   activeCacheLayers.add(rect);
 
   rect.bindPopup(() => createPopup(cacheKey));
-};
+}
+
+function addCacheToMap(i: number, j: number): void {
+  const gridCell = convertLatLngToGridCell(i, j);
+  const cacheKey = getCacheKey(gridCell);
+
+  if (!(cacheKey in cacheStorage)) {
+    initializeCacheStorage(cacheKey, gridCell);
+  }
+
+  addCacheLayer(i, j, cacheKey);
+}
+
+function initializeCacheStorage(cacheKey: string, gridCell: Cell): void {
+  const coins = Array.from(
+    {
+      length: Math.floor(
+        luck([gridCell.i, gridCell.j, "initialValue"].toString()) * 100,
+      ),
+    },
+    (_, serial) => createCoinIdentifier(gridCell.i, gridCell.j, serial),
+  );
+  cacheStorage[cacheKey] = coins;
+}
+
+function createCaches(playerLat: number, playerLng: number) {
+  const playerCell = convertLatLngToGridCell(playerLat, playerLng);
+
+  for (
+    let i = playerCell.i - NEIGHBORHOOD_SIZE;
+    i <= playerCell.i + NEIGHBORHOOD_SIZE;
+    i++
+  ) {
+    for (
+      let j = playerCell.j - NEIGHBORHOOD_SIZE;
+      j <= playerCell.j + NEIGHBORHOOD_SIZE;
+      j++
+    ) {
+      if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
+        addCacheToMap(i, j);
+      }
+    }
+  }
+}
 
 function createPopup(cacheKey: string) {
   const coinsInCache = cacheStorage[cacheKey] || [];
@@ -419,19 +475,25 @@ function fromMemento(state: string) {
 }
 
 function saveToLocalStorage(): void {
-  localStorage.setItem("knownGridCells", toMemento(knownGridCells));
+  localStorage.setItem(
+    "knownGridCells",
+    JSON.stringify([...knownGridCells.entries()]),
+  );
   localStorage.setItem("cacheStorage", toMemento(cacheStorage));
   localStorage.setItem("playerInventory", toMemento(playerInventory));
   localStorage.setItem("playerLine", toMemento(playerLine.getLatLngs()));
 }
 
 //saveToLocalStorage and loadfromLocalStorage done with the help of CJ Moshy
+//there is no way to refactor this and it has to stay this way unfortunately
 function loadFromLocalStorage(): [
   Record<string, string>,
   Record<string, string[]>,
   Map<string, Cell>,
   leaflet.Polyline,
 ] {
+  //for the player location
+  loadPlayerLocation();
   let knownGridCells: Map<string, Cell> = new Map();
   // Use a record to store coins
   let playerInventory: Record<string, string> = {};
@@ -457,36 +519,30 @@ function loadFromLocalStorage(): [
   if (_playerLine) {
     playerLine.setLatLngs([fromMemento(_playerLine)]);
   }
-
   return [playerInventory, cacheStorage, knownGridCells, playerLine];
+}
+
+function loadPlayerLocation() {
+  const storedLocation = localStorage.getItem("playerLocation");
+  if (storedLocation) {
+    const { lat, lng } = JSON.parse(storedLocation);
+    playerMarker.setLatLng([lat, lng]);
+    map.setView([lat, lng], map.getZoom());
+  }
+}
+
+function saveGameState() {
+  const playerPos = playerMarker.getLatLng();
+  localStorage.setItem("playerLocation", JSON.stringify(playerPos));
+  saveToLocalStorage();
 }
 
 // Regenerate cache function that uses save/restore mechanics
 function regenerateCache() {
   clearCacheLayers();
   const playerPos = playerMarker.getLatLng();
-  saveToLocalStorage();
+  saveGameState();
   createCaches(playerPos.lat, playerPos.lng);
-}
-
-function createCaches(playerLat: number, playerLng: number) {
-  const playerCell = convertLatLngToGridCell(playerLat, playerLng);
-
-  for (
-    let i = playerCell.i - NEIGHBORHOOD_SIZE;
-    i <= playerCell.i + NEIGHBORHOOD_SIZE;
-    i++
-  ) {
-    for (
-      let j = playerCell.j - NEIGHBORHOOD_SIZE;
-      j <= playerCell.j + NEIGHBORHOOD_SIZE;
-      j++
-    ) {
-      if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-        addCacheToMap(i, j);
-      }
-    }
-  }
 }
 
 function main() {

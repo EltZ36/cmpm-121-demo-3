@@ -31,8 +31,18 @@ declare global {
     createMarker(position: ILatLng, tooltip: string): leaflet.Marker;
     addLayer(layer: leaflet.Layer): void;
     removeLayer(layer: leaflet.Layer): void;
+    getMarkerPosition(marker: leaflet.Marker): ILatLng;
+    setMarkerPosition(marker: leaflet.Marker, position: ILatLng): void;
+    updateMapView(lat: number, lng: number): void;
     createRectangle(
       bounds: [leaflet.LatLngTuple, leaflet.LatLngTuple],
     ): leaflet.Rectangle;
+  }
+
+  interface SavedItems {
+    playerInventory: Record<string, string>;
+    cacheStorage: Record<string, string[]>;
+    knownGridCells: Map<string, Cell>;
+    playerLine: leaflet.Polyline;
   }
 }
