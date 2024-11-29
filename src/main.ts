@@ -23,73 +23,224 @@ const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
-// Leaflet Adapter
-const LeafletAdapter: IMapLib = {
-  createMap(center, zoom, elementId) {
-    return leaflet.map(document.getElementById(elementId)!, {
-      center: leaflet.latLng(center.lat, center.lng),
-      zoom: zoom,
-      minZoom: zoom,
-      maxZoom: zoom,
-      zoomControl: false,
-      scrollWheelZoom: false,
-    });
-  },
-  createTileLayer(urlTemplate, options) {
-    return leaflet.tileLayer(urlTemplate, options);
-  },
-  createMarker(position, tooltip) {
-    const marker = leaflet.marker([position.lat, position.lng]);
-    marker.bindTooltip(tooltip);
-    return marker;
-  },
-  removeLayer(layer) {
-    map.removeLayer(layer);
-  },
-  getMarkerPosition(marker) {
-    return marker.getLatLng();
-  },
-  setMarkerPosition(marker, position) {
-    marker.setLatLng([position.lat, position.lng]);
-  },
-  updateMapView(lat, lng) {
-    map.setView([lat, lng], map.getZoom());
-  },
-  addLayer(layer) {
-    map.addLayer(layer);
-  },
-  createRectangle(bounds: [leaflet.LatLngTuple, leaflet.LatLngTuple]) {
-    return leaflet.rectangle(bounds);
-  },
+const createLeafletAdapter = (): IMapLib => {
+  return {
+    createMap(center, zoom, elementId) {
+      const map = leaflet.map(elementId, {
+        center: [center.lat, center.lng],
+        zoom,
+        zoomControl: false,
+        scrollWheelZoom: false,
+      });
+
+      return {
+        setView(position, zoomLevel = map.getZoom()) {
+          map.setView([position.lat, position.lng], zoomLevel);
+        },
+        getUnderlyingMap() {
+          return map;
+        },
+        createTileLayer(urlTemplate: string, Options: object) {
+          const createdtileLayer = leaflet.tileLayer(urlTemplate, Options);
+          map.addLayer(createdtileLayer);
+        },
+        getZoom() {
+          return zoom;
+        },
+      } as MapInstance;
+    },
+    createMarker(position, tooltip) {
+      const marker = leaflet.marker([position.lat, position.lng]);
+      marker.bindTooltip(tooltip);
+
+      return {
+        setLatLng(ILatLng: ILatLng) {
+          marker.setLatLng(ILatLng);
+        },
+        getLatLng() {
+          return marker.getLatLng();
+        },
+        addTo(map: MapInstance) {
+          const mapObject = map.getUnderlyingMap();
+          if (mapObject instanceof leaflet.Map) {
+            marker.addTo(mapObject);
+          }
+        },
+        removeFrom(map: MapInstance) {
+          const mapObject = map.getUnderlyingMap();
+          if (mapObject instanceof leaflet.Map) {
+            mapObject.removeLayer(marker);
+          }
+        },
+        getUnderlyingObject() {
+          return marker;
+        },
+      } as unknown as MarkerInstance;
+    },
+
+    createCacheLayer() {
+      const cacheLayer: Set<leaflet.Layer> = new Set();
+      return {
+        addTo(rect: LayerInstance) {
+          const rectObject = rect.getUnderlyingObject();
+          if (rectObject instanceof leaflet.Rectangle) {
+            cacheLayer.add(rectObject);
+          }
+        },
+        clear() {
+          cacheLayer.forEach((layer) => {
+            const mapObject = map.getUnderlyingMap();
+            if (mapObject instanceof leaflet.Map) {
+              layer.removeFrom(mapObject);
+            }
+          });
+          cacheLayer.clear();
+        },
+      } as CacheInstance;
+    },
+
+    createRectangle(bounds, popupContent) {
+      // Create a Leaflet rectangle
+      const rectangle = leaflet.rectangle(
+        [
+          [bounds[0][0], bounds[0][1]],
+          [bounds[1][0], bounds[1][1]],
+        ],
+      );
+
+      if (popupContent) {
+        rectangle.bindPopup(popupContent());
+      }
+
+      // Return a LayerInstance
+      return {
+        addTo(map: MapInstance) {
+          const leafletMap = map.getUnderlyingMap();
+          if (leafletMap instanceof leaflet.Map) {
+            rectangle.addTo(leafletMap);
+          }
+        },
+        removeFrom(map: MapInstance) {
+          const leafletMap = map.getUnderlyingMap();
+          if (leafletMap instanceof leaflet.Map) {
+            leafletMap.removeLayer(rectangle);
+          }
+        },
+        getUnderlyingObject() {
+          return rectangle;
+        },
+      } as LayerInstance;
+    },
+    createPolyLine(position: ILatLng, lineColor: string) {
+      const polyline = leaflet.polyline([position], {
+        color: lineColor,
+      });
+      return {
+        addToLayer(map: MapInstance) {
+          const leafletMap = map.getUnderlyingMap();
+          if (leafletMap instanceof leaflet.Map) {
+            leafletMap.addLayer(polyline);
+          }
+        },
+        addLatLng(array: [] | ILatLng) {
+          polyline.addLatLng(array);
+        },
+        setLatLng(number: ILatLng) {
+          polyline.setLatLngs([number]);
+        },
+        getLatLng() {
+          return polyline.getLatLngs();
+        },
+        setStyle(lineWidth: number) {
+          polyline.setStyle({ weight: lineWidth });
+        },
+      } as PolylineInstance;
+    },
+  };
 };
 
+const matLib = createLeafletAdapter();
+
 // Create the map using the adapter
-const map = LeafletAdapter.createMap(
+const map = matLib.createMap(
   OAKES_CLASSROOM,
   GAMEPLAY_ZOOM_LEVEL,
   "map",
 );
 
 // Populate the map with a background tile layer
-LeafletAdapter.createTileLayer(
+map.createTileLayer(
   "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   {
     maxZoom: 19,
     attribution:
       '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   },
-).addTo(map);
-
-// Add a marker to represent the player
-const playerMarker = LeafletAdapter.createMarker(
-  OAKES_CLASSROOM,
-  "That's you!",
 );
-LeafletAdapter.addLayer(playerMarker);
 
+const createPlayerManager = (
+  map: MapInstance,
+  startingPosition: ILatLng,
+  markerTooltip: string,
+): PlayerManager => {
+  let inventory: Record<string, string> = {};
+  const marker = matLib.createMarker(startingPosition, markerTooltip);
+  let playerLine = matLib.createPolyLine(marker.getLatLng(), "red");
+  playerLine.setStyle(5);
+  playerLine.addToLayer(map);
+  return {
+    goDirection(direction: string) {
+      const offset = directionOffsets[direction];
+      if (offset) {
+        const currentPosition = marker.getLatLng();
+        const newPosition = {
+          lat: currentPosition.lat + offset.lat,
+          lng: currentPosition.lng + offset.lng,
+        };
+
+        marker.setLatLng(newPosition);
+        map.setView(newPosition);
+        player.saveState();
+      }
+    },
+    addToInventory(item: string) {
+      inventory[item] = item;
+      this.saveState(); // Automatically save state after inventory update
+    },
+    removeFromInventory(item: string) {
+      delete inventory[item];
+      this.saveState(); // Automatically save state after inventory update
+    },
+    saveState() {
+      const playerPos = player.getMarker().getLatLng();
+      localStorage.setItem("playerLocation", JSON.stringify(playerPos));
+      saveToLocalStorage();
+    },
+    getMarker() {
+      return marker;
+    },
+    getLine() {
+      return playerLine;
+    },
+    setLine(newLine: PolylineInstance) {
+      playerLine = newLine;
+    },
+    setInventory(newInventory: Record<string, string>) {
+      inventory = newInventory;
+    },
+    getInventory() {
+      return inventory;
+    },
+  };
+};
+
+const player = createPlayerManager(map, OAKES_CLASSROOM, "That's you");
 const [playerInventory, cacheStorage, knownGridCells, playerLine] =
   loadFromLocalStorage();
-playerLine.setStyle({ weight: 5 });
+
+player.getMarker().addTo(map);
+player.setLine(playerLine);
+player.setInventory(playerInventory);
 
 const DIRECTIONS = ["⬆️", "⬇️", "⬅️", "➡️"];
 const directionOffsets: { [direction: string]: { lat: number; lng: number } } =
@@ -112,7 +263,7 @@ function makeButton(
 
 DIRECTIONS.forEach((element) => {
   const movementButton = makeButton(element, () => {
-    goDirection(element);
+    player.goDirection(element);
     drawLine();
     regenerateCache();
   });
@@ -123,26 +274,14 @@ const resetButton = makeButton("🚮", () => {
   resetCaches();
 });
 const locationButton = makeButton("🌐", () => {
-  createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
+  createCaches(
+    player.getMarker().getLatLng().lat,
+    player.getMarker().getLatLng().lng,
+  );
   showLocation();
 });
 
 app.append(resetButton, locationButton);
-
-// Call this function to save the location, e.g., after moving the player
-function goDirection(direction: string) {
-  const offset = directionOffsets[direction];
-  if (offset) {
-    const currentPosition = LeafletAdapter.getMarkerPosition(playerMarker);
-    const newPosition = {
-      lat: currentPosition.lat + offset.lat,
-      lng: currentPosition.lng + offset.lng,
-    };
-    LeafletAdapter.setMarkerPosition(playerMarker, newPosition);
-    LeafletAdapter.updateMapView(newPosition.lat, newPosition.lng);
-    saveGameState();
-  }
-}
 
 const updateCoinDisplay = (
   popupSpan: HTMLSpanElement,
@@ -177,12 +316,12 @@ function depositCoins(
   popupSpan: HTMLSpanElement,
   inventoryDisplay: HTMLDivElement,
 ) {
-  const playerCoins = Object.keys(playerInventory);
+  const playerCoins = Object.keys(player.getInventory());
   if (playerCoins.length > 0) {
-    const coin = playerInventory[playerCoins[0]];
+    const coin = player.getInventory()[playerCoins[0]];
     depositCoinIntoCache(cacheKey, coin);
     updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-    saveGameState();
+    player.saveState();
   }
 }
 
@@ -194,26 +333,24 @@ function withdrawCoins(
   if (cacheStorage[cacheKey]?.length > 0) {
     const coin = cacheStorage[cacheKey][0];
     withdrawCoinFromCache(cacheKey, coin);
+    player.addToInventory(coin);
     updateCoinDisplay(popupSpan, cacheKey, inventoryDisplay);
-    saveGameState();
+    player.saveState();
   }
 }
 
 // Display the player's points
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
-if (getRecordLength(playerInventory) == 0) {
+if (getRecordLength(player.getInventory()) == 0) {
   statusPanel.innerHTML = "No points yet...";
 } else {
   statusPanel.innerHTML = `Player Inventory: ${
-    Object.keys(playerInventory).join(", ")
+    Object.keys(player.getInventory()).join(", ")
   }`;
 }
 
 function drawLine() {
-  playerLine.addLatLng([
-    playerMarker.getLatLng().lat,
-    playerMarker.getLatLng().lng,
-  ]);
+  player.getLine().addLatLng(player.getMarker().getLatLng());
 }
 
 function getRecordLength<K extends string, V>(record: Record<K, V>): number {
@@ -244,8 +381,8 @@ function resetGameState(): void {
   clearRecord(playerInventory);
   clearRecord(cacheStorage);
   knownGridCells.clear();
-  playerLine.setLatLngs([]);
-  playerMarker.setLatLng(OAKES_CLASSROOM);
+  player.getLine().setLatLng([]);
+  player.getMarker().setLatLng(OAKES_CLASSROOM);
   clearCacheLayers();
 }
 
@@ -255,9 +392,9 @@ function resetUI(): void {
 
 function saveGameStateAfterReset(): void {
   localStorage.clear();
-  const playerLatLng = LeafletAdapter.getMarkerPosition(playerMarker);
+  const playerLatLng = player.getMarker().getLatLng();
   createCaches(playerLatLng.lat, playerLatLng.lng);
-  saveGameState();
+  player.saveState();
 }
 
 function showLocation() {
@@ -288,9 +425,9 @@ function handlePositionUpdate() {
 }
 
 function updatePosition(lat: number, lng: number) {
-  playerMarker.setLatLng([lat, lng]);
-  saveGameState();
-  map.setView([lat, lng], map.getZoom());
+  player.getMarker().setLatLng([lat, lng]);
+  player.saveState();
+  map.setView(player.getMarker().getLatLng(), map.getZoom());
 }
 
 function hasPositionChanged(
@@ -336,22 +473,14 @@ function generateRandomCoinIdentifier(
 const createCoinIdentifier = (i: number, j: number, serial: number): string =>
   `${i}:${j}#${generateRandomCoinIdentifier(i, j, serial)}`;
 
-const addCoinToPlayerInventory = (coin: string): void => {
-  playerInventory[coin] = coin;
-};
-
-const removeCoinFromPlayerInventory = (coin: string): void => {
-  delete playerInventory[coin];
-};
-
 const depositCoinIntoCache = (cacheKey: string, coin: string): void => {
   if (!cacheStorage[cacheKey]) {
     cacheStorage[cacheKey] = [];
   }
 
   cacheStorage[cacheKey].push(coin);
-  removeCoinFromPlayerInventory(coin);
-  saveGameState();
+  player.removeFromInventory(coin);
+  player.saveState();
 };
 
 const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
@@ -360,11 +489,13 @@ const withdrawCoinFromCache = (cacheKey: string, coin: string): void => {
   cacheStorage[cacheKey] = cacheStorage[cacheKey].filter((storedCoin) =>
     storedCoin !== coin
   );
-  addCoinToPlayerInventory(coin);
-  saveGameState();
+  player.addToInventory(coin);
+  player.saveState();
 };
 
-const activeCacheLayers: Set<leaflet.Layer> = new Set();
+//change this too
+//const activeCacheLayers: Set<leaflet.Layer> = new Set();
+const activeCacheLayers: CacheInstance = matLib.createCacheLayer();
 
 function getCacheKey(gridCell: Cell): string {
   return `${gridCell.i}:${gridCell.j}`;
@@ -388,11 +519,9 @@ function calculateBounds(
 
 function addCacheLayer(i: number, j: number, cacheKey: string): void {
   const bounds = calculateBounds(i, j);
-  const rect = LeafletAdapter.createRectangle(bounds);
-  LeafletAdapter.addLayer(rect);
-  activeCacheLayers.add(rect);
-
-  rect.bindPopup(() => createPopup(cacheKey));
+  const rect = matLib.createRectangle(bounds, () => createPopup(cacheKey));
+  rect.addTo(map);
+  activeCacheLayers.addTo(rect);
 }
 
 function addCacheToMap(i: number, j: number): void {
@@ -459,9 +588,6 @@ function createPopup(cacheKey: string) {
 
 // Function to remove all current cache layers
 function clearCacheLayers() {
-  activeCacheLayers.forEach((layer) => {
-    LeafletAdapter.removeLayer(layer);
-  });
   activeCacheLayers.clear();
 }
 
@@ -480,8 +606,8 @@ function saveToLocalStorage(): void {
     JSON.stringify([...knownGridCells.entries()]),
   );
   localStorage.setItem("cacheStorage", toMemento(cacheStorage));
-  localStorage.setItem("playerInventory", toMemento(playerInventory));
-  localStorage.setItem("playerLine", toMemento(playerLine.getLatLngs()));
+  localStorage.setItem("playerInventory", toMemento(player.getInventory()));
+  localStorage.setItem("playerLine", toMemento(player.getLine().getLatLng()));
 }
 
 //saveToLocalStorage and loadfromLocalStorage done with the help of CJ Moshy
@@ -490,7 +616,7 @@ function loadFromLocalStorage(): [
   Record<string, string>,
   Record<string, string[]>,
   Map<string, Cell>,
-  leaflet.Polyline,
+  PolylineInstance,
 ] {
   //for the player location
   loadPlayerLocation();
@@ -499,9 +625,8 @@ function loadFromLocalStorage(): [
   let playerInventory: Record<string, string> = {};
   // Cache storage, using a Record structure
   let cacheStorage: Record<string, string[]> = {};
-  const playerLine = leaflet.polyline([playerMarker.getLatLng()], {
-    color: "red",
-  }).addTo(map);
+  const player = createPlayerManager(map, OAKES_CLASSROOM, "That's you");
+  const playerLine = player.getLine();
   const _knownGridCells = localStorage.getItem("knownGridCells");
   const _cacheStorage = localStorage.getItem("cacheStorage");
   const _playerInventory = localStorage.getItem("playerInventory");
@@ -517,7 +642,7 @@ function loadFromLocalStorage(): [
     cacheStorage = fromMemento(_cacheStorage);
   }
   if (_playerLine) {
-    playerLine.setLatLngs([fromMemento(_playerLine)]);
+    playerLine.setLatLng(fromMemento(_playerLine));
   }
   return [playerInventory, cacheStorage, knownGridCells, playerLine];
 }
@@ -526,28 +651,25 @@ function loadPlayerLocation() {
   const storedLocation = localStorage.getItem("playerLocation");
   if (storedLocation) {
     const { lat, lng } = JSON.parse(storedLocation);
-    playerMarker.setLatLng([lat, lng]);
-    map.setView([lat, lng], map.getZoom());
+    player.getMarker().setLatLng([lat, lng]);
+    map.setView(player.getMarker().getLatLng(), map.getZoom());
   }
-}
-
-function saveGameState() {
-  const playerPos = playerMarker.getLatLng();
-  localStorage.setItem("playerLocation", JSON.stringify(playerPos));
-  saveToLocalStorage();
 }
 
 // Regenerate cache function that uses save/restore mechanics
 function regenerateCache() {
   clearCacheLayers();
-  const playerPos = playerMarker.getLatLng();
-  saveGameState();
+  const playerPos = player.getMarker().getLatLng();
+  player.saveState();
   createCaches(playerPos.lat, playerPos.lng);
 }
 
 function main() {
   loadPlayerLocation();
-  createCaches(playerMarker.getLatLng().lat, playerMarker.getLatLng().lng);
+  createCaches(
+    player.getMarker().getLatLng().lat,
+    player.getMarker().getLatLng().lng,
+  );
 }
 
 main();
